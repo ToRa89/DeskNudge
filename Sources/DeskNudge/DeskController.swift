@@ -52,6 +52,7 @@ final class DeskController: NSObject, ObservableObject {
     private var userDisconnected = false
 
     private var tracker: MoveTracker?
+    private var lastNudgeAt: Date?
     private var moveTimer: Timer?
     private var jogTimer: Timer?
     private static let maxJogDuration: TimeInterval = 30
@@ -104,6 +105,7 @@ final class DeskController: NSObject, ObservableObject {
         peripheral.writeValue(LinakCommand.wakeUp, for: commandChar, type: writeType(commandChar))
         peripheral.writeValue(LinakCommand.stop, for: commandChar, type: writeType(commandChar))
         tracker = MoveTracker(target: target, startedAt: Date(), startPosition: sample?.position)
+        lastNudgeAt = nil
         status = .moving
         writeTarget(target, to: inputChar, on: peripheral)
         moveTimer = Timer.scheduledTimer(withTimeInterval: Self.tickInterval, repeats: true) { [weak self] _ in
@@ -164,10 +166,17 @@ final class DeskController: NSObject, ObservableObject {
             finishMove(with: .failure(.notConnected))
             return
         }
-        let outcome = tracker.evaluate(now: Date(), sample: sample)
+        let now = Date()
+        let outcome = tracker.evaluate(now: now, sample: sample)
         log.debug("tick sample=\(String(describing: self.sample), privacy: .public) outcome=\(String(describing: outcome), privacy: .public)")
         switch outcome {
         case .keepGoing:
+            if let direction = tracker.wakeNudge(now: now, sample: sample, lastNudgeAt: lastNudgeAt), let commandChar {
+                log.info("wake nudge \(String(describing: direction), privacy: .public) sample=\(String(describing: self.sample), privacy: .public)")
+                let command = direction == .up ? LinakCommand.up : LinakCommand.down
+                peripheral.writeValue(command, for: commandChar, type: writeType(commandChar))
+                lastNudgeAt = now
+            }
             writeTarget(tracker.target, to: inputChar, on: peripheral)
             peripheral.readValue(for: heightChar ?? inputChar)
         case .reached:
@@ -189,6 +198,7 @@ final class DeskController: NSObject, ObservableObject {
         moveTimer = nil
         let wasMoving = tracker != nil
         tracker = nil
+        lastNudgeAt = nil
         pendingTarget = nil
         if wasMoving, let peripheral, let commandChar {
             peripheral.writeValue(LinakCommand.stop, for: commandChar, type: writeType(commandChar))

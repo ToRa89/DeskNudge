@@ -69,6 +69,32 @@ final class MoveTrackerTests: XCTestCase {
         XCTAssertEqual(outcome, .keepGoing)
     }
 
+    func testNoWakeNudgeRightAfterStart() {
+        XCTAssertNil(tracker().wakeNudge(now: start + 1, sample: HeightSpeed(position: 2000, speed: 0), lastNudgeAt: nil))
+    }
+
+    func testWakeNudgeUpWhenDeskIgnoresTarget() {
+        XCTAssertEqual(tracker().wakeNudge(now: start + 2, sample: HeightSpeed(position: 2000, speed: 0), lastNudgeAt: nil), .up)
+    }
+
+    func testWakeNudgeDownWhenTargetIsBelow() {
+        let outcome = tracker(target: 1000).wakeNudge(now: start + 2, sample: HeightSpeed(position: 2000, speed: 0), lastNudgeAt: nil)
+        XCTAssertEqual(outcome, .down)
+    }
+
+    func testNoWakeNudgeWhileDeskMoves() {
+        XCTAssertNil(tracker().wakeNudge(now: start + 2, sample: HeightSpeed(position: 2300, speed: 300), lastNudgeAt: nil))
+    }
+
+    func testWakeNudgeRepeatsOnlyAfterInterval() {
+        XCTAssertNil(tracker().wakeNudge(now: start + 2.5, sample: HeightSpeed(position: 2000, speed: 0), lastNudgeAt: start + 2))
+        XCTAssertEqual(tracker().wakeNudge(now: start + 3.6, sample: HeightSpeed(position: 2000, speed: 0), lastNudgeAt: start + 2), .up)
+    }
+
+    func testNoWakeNudgeAfterStartGrace() {
+        XCTAssertNil(tracker().wakeNudge(now: start + 6.5, sample: HeightSpeed(position: 2000, speed: 0), lastNudgeAt: start + 4))
+    }
+
     func testTimesOut() {
         let outcome = tracker().evaluate(now: start + 120, sample: HeightSpeed(position: 2500, speed: 200))
         XCTAssertEqual(outcome, .timedOut)

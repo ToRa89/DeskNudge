@@ -45,6 +45,24 @@ public struct MoveTracker: Sendable {
         return moved > Self.defaultTolerance
     }
 
+    public enum NudgeDirection: Equatable, Sendable { case up, down }
+
+    /// After a long idle period the controller ignores reference-input targets
+    /// until it receives a real up/down command. Seconds before the first nudge
+    /// and between nudges.
+    public static let nudgeInterval: TimeInterval = 1.5
+
+    /// Direction for a short up/down pulse when the desk still sits at its start
+    /// position although a target was sent; nil when no pulse is due.
+    public func wakeNudge(now: Date, sample: HeightSpeed?, lastNudgeAt: Date?) -> NudgeDirection? {
+        guard let sample, sample.speed == 0, !hasLeftStart(sample.position) else { return nil }
+        let elapsed = now.timeIntervalSince(startedAt)
+        guard elapsed >= Self.nudgeInterval, elapsed < startGrace else { return nil }
+        if let lastNudgeAt, now.timeIntervalSince(lastNudgeAt) < Self.nudgeInterval { return nil }
+        guard sample.position != target else { return nil }
+        return target > sample.position ? .up : .down
+    }
+
     public func evaluate(now: Date, sample: HeightSpeed?) -> Outcome {
         let elapsed = now.timeIntervalSince(startedAt)
         guard let sample else {
