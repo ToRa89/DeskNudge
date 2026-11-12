@@ -18,12 +18,31 @@ public struct MoveTracker: Sendable {
     public let startedAt: Date
     public let timeout: TimeInterval
     public let settleDelay: TimeInterval
+    /// Position when the drive was requested; nil if unknown.
+    public let startPosition: UInt16?
+    /// A desk waking from standby can take several seconds before it starts moving.
+    public let startGrace: TimeInterval
 
-    public init(target: UInt16, startedAt: Date, timeout: TimeInterval = 60, settleDelay: TimeInterval = 1.5) {
+    public init(
+        target: UInt16,
+        startedAt: Date,
+        startPosition: UInt16? = nil,
+        timeout: TimeInterval = 60,
+        settleDelay: TimeInterval = 1.5,
+        startGrace: TimeInterval = 6
+    ) {
         self.target = target
         self.startedAt = startedAt
+        self.startPosition = startPosition
         self.timeout = timeout
         self.settleDelay = settleDelay
+        self.startGrace = startGrace
+    }
+
+    private func hasLeftStart(_ position: UInt16) -> Bool {
+        guard let startPosition else { return false }
+        let moved = position > startPosition ? position - startPosition : startPosition - position
+        return moved > Self.defaultTolerance
     }
 
     public func evaluate(now: Date, sample: HeightSpeed?) -> Outcome {
@@ -36,6 +55,7 @@ public struct MoveTracker: Sendable {
 
         if atRest && distance <= Self.defaultTolerance { return .reached }
         if elapsed >= timeout { return .timedOut }
+        if atRest && !hasLeftStart(sample.position) && elapsed < startGrace { return .keepGoing }
         if atRest && elapsed >= settleDelay {
             return distance <= Self.restTolerance ? .reached : .stoppedShort(sample.position)
         }

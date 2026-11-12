@@ -37,6 +37,10 @@ final class DeskController: NSObject, ObservableObject {
     private let commandUUID = CBUUID(string: LinakUUID.command)
     private let heightUUID = CBUUID(string: LinakUUID.heightSpeed)
     private let inputUUID = CBUUID(string: LinakUUID.referenceInput)
+    private let dpgService = CBUUID(string: LinakUUID.dpgService)
+    private let dpgUUID = CBUUID(string: LinakUUID.dpg)
+    private var dpgChar: CBCharacteristic?
+    private var userIDFixSent = false
 
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
@@ -96,9 +100,10 @@ final class DeskController: NSObject, ObservableObject {
             connectToSavedDesk()
             return
         }
+        log.info("move start target=\(target, privacy: .public) sample=\(String(describing: self.sample), privacy: .public) cmdProps=\(commandChar.properties.rawValue, privacy: .public) inputProps=\(inputChar.properties.rawValue, privacy: .public) notifying=\(self.heightChar?.isNotifying ?? false, privacy: .public)")
         peripheral.writeValue(LinakCommand.wakeUp, for: commandChar, type: writeType(commandChar))
         peripheral.writeValue(LinakCommand.stop, for: commandChar, type: writeType(commandChar))
-        tracker = MoveTracker(target: target, startedAt: Date())
+        tracker = MoveTracker(target: target, startedAt: Date(), startPosition: sample?.position)
         status = .moving
         writeTarget(target, to: inputChar, on: peripheral)
         moveTimer = Timer.scheduledTimer(withTimeInterval: Self.tickInterval, repeats: true) { [weak self] _ in
@@ -122,6 +127,7 @@ final class DeskController: NSObject, ObservableObject {
             return
         }
         let command = direction == .up ? LinakCommand.up : LinakCommand.down
+        log.info("jog start \(String(describing: direction), privacy: .public) sample=\(String(describing: self.sample), privacy: .public)")
         let startedAt = Date()
         status = .moving
         peripheral.writeValue(command, for: commandChar, type: writeType(commandChar))
@@ -158,7 +164,9 @@ final class DeskController: NSObject, ObservableObject {
             finishMove(with: .failure(.notConnected))
             return
         }
-        switch tracker.evaluate(now: Date(), sample: sample) {
+        let outcome = tracker.evaluate(now: Date(), sample: sample)
+        log.debug("tick sample=\(String(describing: self.sample), privacy: .public) outcome=\(String(describing: outcome), privacy: .public)")
+        switch outcome {
         case .keepGoing:
             writeTarget(tracker.target, to: inputChar, on: peripheral)
             peripheral.readValue(for: heightChar ?? inputChar)
@@ -233,6 +241,19 @@ final class DeskController: NSObject, ObservableObject {
         commandChar = nil
         heightChar = nil
         inputChar = nil
+        dpgChar = nil
+        userIDFixSent = false
+    }
+
+    /// Answers to the user-ID read: DPG1C boxes ignore Bluetooth movement unless the ID starts with 0x01.
+    private func handleDPGResponse(_ response: Data, on peripheral: CBPeripheral) {
+        let hex = response.map { String(format: "%02X", $0) }.joined(separator: " ")
+        log.info("dpg response \(hex, privacy: .public)")
+        guard !userIDFixSent, let dpgChar, let userID = LinakDPG.payload(ofResponse: response),
+              let fixed = LinakDPG.fixedUserID(userID) else { return }
+        log.info("setting user id, first byte 0x01")
+        userIDFixSent = true
+        peripheral.writeValue(LinakDPG.writeRequest(LinakDPG.userIDCommand, payload: fixed), for: dpgChar, type: writeType(dpgChar))
     }
 
     private func becameReady() {
@@ -309,7 +330,7 @@ extension DeskController: CBCentralManagerDelegate {
     nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         MainActor.assumeIsolated {
             userDisconnected = false
-            peripheral.discoverServices([controlService, outputService, inputService])
+            peripheral.discoverServices([controlService, outputService, inputService, dpgService])
         }
     }
 
@@ -357,7 +378,7 @@ extension DeskController: CBPeripheralDelegate {
                 return
             }
             for service in peripheral.services ?? [] {
-                peripheral.discoverCharacteristics([commandUUID, heightUUID, inputUUID], for: service)
+                peripheral.discoverCharacteristics([commandUUID, heightUUID, inputUUID, dpgUUID], for: service)
             }
         }
     }
@@ -374,6 +395,9 @@ extension DeskController: CBPeripheralDelegate {
                     peripheral.readValue(for: characteristic)
                 case inputUUID:
                     inputChar = characteristic
+                case dpgUUID:
+                    dpgChar = characteristic
+                    peripheral.setNotifyValue(true, for: characteristic)
                 default:
                     break
                 }
@@ -386,8 +410,25 @@ extension DeskController: CBPeripheralDelegate {
         let value = characteristic.value
         let uuid = characteristic.uuid
         MainActor.assumeIsolated {
+            if let error { log.error("read failed: \(error.localizedDescription, privacy: .public)") }
+            if error == nil, uuid == dpgUUID, let value {
+                handleDPGResponse(value, on: peripheral)
+                return
+            }
             guard error == nil, uuid == heightUUID, let value, let decoded = LinakCodec.decodeHeightSpeed(value) else { return }
             sample = decoded
+        }
+    }
+
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        let notifying = characteristic.isNotifying
+        let message = error?.localizedDescription ?? "ok"
+        let uuid = characteristic.uuid
+        MainActor.assumeIsolated {
+            log.info("notify \(uuid.uuidString, privacy: .public) state=\(notifying, privacy: .public) result=\(message, privacy: .public)")
+            if uuid == dpgUUID, notifying, let dpgChar {
+                peripheral.writeValue(LinakDPG.readRequest(LinakDPG.userIDCommand), for: dpgChar, type: writeType(dpgChar))
+            }
         }
     }
 

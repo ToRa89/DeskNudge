@@ -8,6 +8,8 @@ public enum LinakUUID {
     public static let heightSpeed = "99FA0021-338A-1024-8A49-009C0215F78A"
     public static let referenceInputService = "99FA0030-338A-1024-8A49-009C0215F78A"
     public static let referenceInput = "99FA0031-338A-1024-8A49-009C0215F78A"
+    public static let dpgService = "99FA0010-338A-1024-8A49-009C0215F78A"
+    public static let dpg = "99FA0011-338A-1024-8A49-009C0215F78A"
 }
 
 public enum LinakCommand {

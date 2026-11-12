@@ -24,8 +24,8 @@ final class LinakCodecTests: XCTestCase {
 final class MoveTrackerTests: XCTestCase {
     private let start = Date(timeIntervalSince1970: 1_000)
 
-    private func tracker(target: UInt16 = 4000) -> MoveTracker {
-        MoveTracker(target: target, startedAt: start)
+    private func tracker(target: UInt16 = 4000, startPosition: UInt16? = 2000) -> MoveTracker {
+        MoveTracker(target: target, startedAt: start, startPosition: startPosition)
     }
 
     func testKeepsGoingWhileMoving() {
@@ -51,6 +51,22 @@ final class MoveTrackerTests: XCTestCase {
     func testStoppedShortWhenStandstillFarFromTarget() {
         let outcome = tracker().evaluate(now: start + 3, sample: HeightSpeed(position: 2500, speed: 0))
         XCTAssertEqual(outcome, .stoppedShort(2500))
+    }
+
+    func testWaitsForSlowStartAfterStandby() {
+        // Desk still at its start position 3 s after the command: it may be waking up.
+        let outcome = tracker().evaluate(now: start + 3, sample: HeightSpeed(position: 2000, speed: 0))
+        XCTAssertEqual(outcome, .keepGoing)
+    }
+
+    func testStoppedShortWhenDeskNeverStarts() {
+        let outcome = tracker().evaluate(now: start + 7, sample: HeightSpeed(position: 2000, speed: 0))
+        XCTAssertEqual(outcome, .stoppedShort(2000))
+    }
+
+    func testUnknownStartPositionAlsoGetsStartGrace() {
+        let outcome = tracker(startPosition: nil).evaluate(now: start + 3, sample: HeightSpeed(position: 2000, speed: 0))
+        XCTAssertEqual(outcome, .keepGoing)
     }
 
     func testTimesOut() {
@@ -140,5 +156,33 @@ final class JogCommandTests: XCTestCase {
     func testJogCommands() {
         XCTAssertEqual(LinakCommand.up, Data([0x47, 0x00]))
         XCTAssertEqual(LinakCommand.down, Data([0x46, 0x00]))
+    }
+}
+
+final class LinakDPGTests: XCTestCase {
+    func testReadUserIDRequest() {
+        XCTAssertEqual(LinakDPG.readRequest(LinakDPG.userIDCommand), Data([0x7F, 0x86, 0x00]))
+    }
+
+    func testWriteUserIDRequest() {
+        XCTAssertEqual(LinakDPG.writeRequest(LinakDPG.userIDCommand, payload: Data([0x01, 0xAA])), Data([0x7F, 0x86, 0x80, 0x01, 0xAA]))
+    }
+
+    func testValidResponseYieldsPayload() {
+        XCTAssertEqual(LinakDPG.payload(ofResponse: Data([0x01, 0x11, 0x05, 0xAA, 0xBB])), Data([0x05, 0xAA, 0xBB]))
+    }
+
+    func testInvalidResponseYieldsNil() {
+        XCTAssertNil(LinakDPG.payload(ofResponse: Data([0x02, 0x11, 0x05])))
+        XCTAssertNil(LinakDPG.payload(ofResponse: Data([0x01])))
+    }
+
+    func testUserIDWithoutLeadingOneGetsFixed() {
+        XCTAssertEqual(LinakDPG.fixedUserID(Data([0x05, 0xAA, 0xBB])), Data([0x01, 0xAA, 0xBB]))
+    }
+
+    func testUserIDAlreadyOkNeedsNoFix() {
+        XCTAssertNil(LinakDPG.fixedUserID(Data([0x01, 0xAA, 0xBB])))
+        XCTAssertNil(LinakDPG.fixedUserID(Data()))
     }
 }
